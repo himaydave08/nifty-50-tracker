@@ -682,16 +682,16 @@ function calculateSMA(prices, period) {
 
 /**
  * Helper to check timeframe status and compute moving averages.
- * Returns an object with the green status and formatted text including the averages.
+ * Returns an object with the green status and raw moving average values.
  */
 function getTimeframeStatus(prices, period20, period50, lastPrice) {
   if (!prices || prices.length === 0) {
-    return { isGreen: false, text: "NO DATA" };
+    return { isGreen: false, ma20: null, ma50: null };
   }
   var ma20 = calculateSMA(prices, period20);
   var ma50 = calculateSMA(prices, period50);
   if (ma20 === null || ma50 === null) {
-    return { isGreen: false, text: "NO DATA" };
+    return { isGreen: false, ma20: null, ma50: null };
   }
   
   var priceToUse = lastPrice;
@@ -703,12 +703,11 @@ function getTimeframeStatus(prices, period20, period50, lastPrice) {
   }
   
   if (priceToUse === null || priceToUse === undefined) {
-    return { isGreen: false, text: "NO DATA" };
+    return { isGreen: false, ma20: ma20, ma50: ma50 };
   }
   
   var isGreen = (priceToUse > ma20 && priceToUse > ma50);
-  var text = (isGreen ? "GREEN" : "RED") + " (" + ma20.toFixed(2) + " / " + ma50.toFixed(2) + ")";
-  return { isGreen: isGreen, text: text };
+  return { isGreen: isGreen, ma20: ma20, ma50: ma50 };
 }
 
 /**
@@ -832,12 +831,18 @@ function updateTechnicalAnalysis() {
         symbol,
         name,
         lastPrice,
-        monthlyStatus.text,
-        dailyStatus.text,
-        status2h.text,
-        status1h.text,
-        status30m.text,
-        status15m.text,
+        monthlyStatus.ma20,
+        monthlyStatus.ma50,
+        dailyStatus.ma20,
+        dailyStatus.ma50,
+        status2h.ma20,
+        status2h.ma50,
+        status1h.ma20,
+        status1h.ma50,
+        status30m.ma20,
+        status30m.ma50,
+        status15m.ma20,
+        status15m.ma50,
         verdict
       ]);
     }
@@ -851,55 +856,86 @@ function updateTechnicalAnalysis() {
     taSheet.clearConditionalFormatRules();
     taSheet.setHiddenGridlines(false);
     
-    var headers = [
-      "Symbol", 
-      "Company Name", 
-      "Price", 
-      "Monthly (1mo)", 
-      "Daily (1d)", 
-      "2 Hour (2h)", 
-      "1 Hour (1h)", 
-      "30 Min (30m)", 
-      "15 Min (15m)", 
+    var numCols = 16;
+    
+    // Setup double-row headers
+    var row1Headers = [
+      "Symbol", "Company Name", "Price", 
+      "Monthly (1mo)", "", 
+      "Daily (1d)", "", 
+      "2 Hour (2h)", "", 
+      "1 Hour (1h)", "", 
+      "30 Min (30m)", "", 
+      "15 Min (15m)", "", 
       "Verdict"
     ];
-    taSheet.appendRow(headers);
+    taSheet.appendRow(row1Headers);
+    
+    var row2Headers = [
+      "", "", "", 
+      "20 MA", "50 MA", 
+      "20 MA", "50 MA", 
+      "20 MA", "50 MA", 
+      "20 MA", "50 MA", 
+      "20 MA", "50 MA", 
+      "20 MA", "50 MA", 
+      ""
+    ];
+    taSheet.appendRow(row2Headers);
+    
+    // Merges
+    taSheet.getRange("A1:A2").merge();
+    taSheet.getRange("B1:B2").merge();
+    taSheet.getRange("C1:C2").merge();
+    taSheet.getRange("P1:P2").merge();
+    
+    taSheet.getRange("D1:E1").merge();
+    taSheet.getRange("F1:G1").merge();
+    taSheet.getRange("H1:I1").merge();
+    taSheet.getRange("J1:K1").merge();
+    taSheet.getRange("L1:M1").merge();
+    taSheet.getRange("N1:O1").merge();
     
     if (results.length > 0) {
-      taSheet.getRange(2, 1, results.length, headers.length).setValues(results);
+      taSheet.getRange(3, 1, results.length, numCols).setValues(results);
     }
     
     var numRows = results.length;
-    taSheet.getRange(1, 1, numRows + 1, headers.length).setFontFamily("Segoe UI").setFontSize(11);
-    taSheet.getRange(1, 1, 1, headers.length).setBackground("#1F4E79").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
+    var totalRows = numRows + 2;
     
-    var dataRange = taSheet.getRange(2, 1, numRows, headers.length);
+    taSheet.getRange(1, 1, totalRows, numCols).setFontFamily("Segoe UI").setFontSize(11);
+    
+    var headerRange = taSheet.getRange(1, 1, 2, numCols);
+    headerRange.setBackground("#1F4E79").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle");
+    
+    var dataRange = taSheet.getRange(3, 1, numRows, numCols);
     dataRange.setBorder(true, true, true, true, true, true, "#D9D9D9", SpreadsheetApp.BorderStyle.SOLID);
     
-    taSheet.getRange(2, 1, numRows, 2).setHorizontalAlignment("left");
-    taSheet.getRange(2, 3, numRows, 1).setHorizontalAlignment("center").setNumberFormat("#,##0.00");
-    taSheet.getRange(2, 4, numRows, 7).setHorizontalAlignment("center").setFontWeight("bold");
+    taSheet.getRange(3, 1, numRows, 2).setHorizontalAlignment("left");
+    taSheet.getRange(3, 3, numRows, 1).setHorizontalAlignment("center").setNumberFormat("#,##0.00");
+    taSheet.getRange(3, 4, numRows, 12).setHorizontalAlignment("center").setNumberFormat("#,##0.00");
+    taSheet.getRange(3, 16, numRows, 1).setHorizontalAlignment("center").setFontWeight("bold");
     
-    for (var r = 2; r <= numRows + 1; r++) {
+    for (var r = 3; r <= totalRows; r++) {
       if (r % 2 === 0) {
-        taSheet.getRange(r, 1, 1, headers.length).setBackground("#F2F4F7");
+        taSheet.getRange(r, 1, 1, numCols).setBackground("#F2F4F7");
       }
     }
     
     var rules = [];
     
     var greenRule = SpreadsheetApp.newConditionalFormatRule()
-      .whenTextStartsWith("GREEN")
+      .whenFormulaSatisfied("=AND(D3<>\"\", $C3>D3)")
       .setBackground("#C6EFCE")
       .setFontColor("#006100")
-      .setRanges([taSheet.getRange(2, 4, numRows, 6)])
+      .setRanges([taSheet.getRange(3, 4, numRows, 12)])
       .build();
       
     var redRule = SpreadsheetApp.newConditionalFormatRule()
-      .whenTextStartsWith("RED")
+      .whenFormulaSatisfied("=AND(D3<>\"\", $C3<=D3)")
       .setBackground("#FFC7CE")
       .setFontColor("#9C0006")
-      .setRanges([taSheet.getRange(2, 4, numRows, 6)])
+      .setRanges([taSheet.getRange(3, 4, numRows, 12)])
       .build();
       
     var buyRule = SpreadsheetApp.newConditionalFormatRule()
@@ -907,7 +943,7 @@ function updateTechnicalAnalysis() {
       .setBackground("#C6EFCE")
       .setFontColor("#006100")
       .setBold(true)
-      .setRanges([taSheet.getRange(2, 10, numRows, 1)])
+      .setRanges([taSheet.getRange(3, 16, numRows, 1)])
       .build();
       
     var holdRule = SpreadsheetApp.newConditionalFormatRule()
@@ -915,13 +951,13 @@ function updateTechnicalAnalysis() {
       .setBackground("#FFF2CC")
       .setFontColor("#B25E00")
       .setBold(true)
-      .setRanges([taSheet.getRange(2, 10, numRows, 1)])
+      .setRanges([taSheet.getRange(3, 16, numRows, 1)])
       .build();
       
     rules.push(greenRule, redRule, buyRule, holdRule);
     taSheet.setConditionalFormatRules(rules);
     
-    taSheet.autoResizeColumns(1, headers.length);
+    taSheet.autoResizeColumns(1, numCols);
     Logger.log("Technical Analysis sheet updated successfully!");
     
   } catch (err) {
