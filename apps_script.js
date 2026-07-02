@@ -661,6 +661,7 @@ function onOpen() {
   ui.createMenu("Nifty Tracker")
     .addItem("Run Technical Analysis", "updateTechnicalAnalysis")
     .addItem("Fetch Daily Price Checkpoints", "fetchNiftyPrices")
+    .addItem("Enable Automatic Updates", "setupAutoUpdates")
     .addToUi();
 }
 
@@ -963,4 +964,31 @@ function updateTechnicalAnalysis() {
   } catch (err) {
     Logger.log("Error in updateTechnicalAnalysis: " + err.toString());
   }
+}
+
+/**
+ * Programmatically sets up time-driven triggers to update prices and technical analysis automatically.
+ * Run this function once from the custom menu.
+ */
+function setupAutoUpdates() {
+  // Delete existing triggers for fetchNiftyPrices to avoid duplicates
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    var fnName = triggers[i].getHandlerFunction();
+    if (fnName === "fetchNiftyPrices") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  
+  // Create a new trigger to run fetchNiftyPrices every 30 minutes
+  ScriptApp.newTrigger("fetchNiftyPrices")
+    .timeBased()
+    .everyMinutes(30)
+    .create();
+    
+  SpreadsheetApp.getUi().alert(
+    "Automatic Updates Enabled!",
+    "The sheet will now fetch prices and update the Technical Analysis dashboard automatically every 30 minutes.",
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
 }
