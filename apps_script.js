@@ -303,6 +303,12 @@ function fetchNiftyPrices() {
     var cellUpdates = writePricesToSheet(dateStr, pricesData);
     Logger.log("Prices successfully updated. Total cells changed: " + cellUpdates);
     
+    try {
+      updateTechnicalAnalysis();
+    } catch (taErr) {
+      Logger.log("Error in updateTechnicalAnalysis inside fetchNiftyPrices: " + taErr.toString());
+    }
+    
   } catch (err) {
     Logger.log("Error in fetchNiftyPrices: " + err.toString());
   }
@@ -643,5 +649,272 @@ function testYahooApi() {
   } catch (err) {
     Logger.log("Error parsing JSON: " + err.toString());
     Logger.log("Response body: " + response.getContentText());
+  }
+}
+
+/**
+ * Automatically runs when the spreadsheet is opened.
+ * Adds a custom menu to trigger the Technical Analysis manually.
+ */
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu("Nifty Tracker")
+    .addItem("Run Technical Analysis", "updateTechnicalAnalysis")
+    .addItem("Fetch Daily Price Checkpoints", "fetchNiftyPrices")
+    .addToUi();
+}
+
+/**
+ * Calculates Simple Moving Average (SMA) of an array of numbers
+ */
+function calculateSMA(prices, period) {
+  var cleanPrices = prices.filter(function(p) { return p !== null && p !== undefined; });
+  if (cleanPrices.length < period) {
+    return null;
+  }
+  var sum = 0;
+  var startIdx = cleanPrices.length - period;
+  for (var i = startIdx; i < cleanPrices.length; i++) {
+    sum += cleanPrices[i];
+  }
+  return sum / period;
+}
+
+/**
+ * Helper to check if a timeframe is "GREEN" (Price > MA20 AND Price > MA50)
+ */
+function checkGreen(prices, period20, period50, lastPrice) {
+  if (!prices || prices.length === 0) return false;
+  var ma20 = calculateSMA(prices, period20);
+  var ma50 = calculateSMA(prices, period50);
+  if (ma20 === null || ma50 === null) return false;
+  
+  var priceToUse = lastPrice;
+  if (priceToUse === null || priceToUse === undefined) {
+    var cleanPrices = prices.filter(function(p) { return p !== null && p !== undefined; });
+    if (cleanPrices.length > 0) {
+      priceToUse = cleanPrices[cleanPrices.length - 1];
+    }
+  }
+  
+  if (priceToUse === null || priceToUse === undefined) return false;
+  return (priceToUse > ma20 && priceToUse > ma50);
+}
+
+/**
+ * Updates the 'Technical Analysis' tab with moving average indicators.
+ */
+function updateTechnicalAnalysis() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var stockListSheet = ss.getSheetByName(STOCK_LIST_SHEET);
+    if (!stockListSheet) {
+      Logger.log("Stock List configuration sheet not found.");
+      return;
+    }
+    var lastRow = stockListSheet.getLastRow();
+    if (lastRow <= 1) {
+      Logger.log("No stocks in Stock List.");
+      return;
+    }
+    
+    var tickers = stockListSheet.getRange(2, 1, lastRow - 1, 1).getValues().map(function(row) {
+      return row[0].toString().trim();
+    }).filter(function(t) {
+      return t !== "";
+    });
+    
+    if (tickers.length === 0) {
+      Logger.log("No tickers found.");
+      return;
+    }
+    
+    var allData = {};
+    tickers.forEach(function(t) {
+      allData[t] = {};
+    });
+    
+    var batchSize = 20;
+    
+    // Configurations to fetch in batch
+    var configs = [
+      { key: "1mo", range: "5y", interval: "1mo" },
+      { key: "1d", range: "1y", interval: "1d" },
+      { key: "1h", range: "1mo", interval: "1h" },
+      { key: "30m", range: "1mo", interval: "30m" },
+      { key: "15m", range: "5d", interval: "15m" }
+    ];
+    
+    for (var iConfig = 0; iConfig < configs.length; iConfig++) {
+      var cfgObj = configs[iConfig];
+      Logger.log("Fetching " + cfgObj.key + " data for " + tickers.length + " tickers...");
+      
+      for (var bIdx = 0; bIdx < tickers.length; bIdx += batchSize) {
+        var batchTickers = tickers.slice(bIdx, bIdx + batchSize);
+        var url = "https://query1.finance.yahoo.com/v8/finance/spark?symbols=" + 
+                  batchTickers.map(encodeURIComponent).join(",") + 
+                  "&range=" + cfgObj.range + 
+                  "&interval=" + cfgObj.interval;
+        
+        var response = UrlFetchApp.fetch(url, {
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          },
+          "muteHttpExceptions": true
+        });
+        
+        if (response.getResponseCode() !== 200) {
+          Logger.log("Yahoo API error for " + cfgObj.key + " batch: " + response.getResponseCode());
+          continue;
+        }
+        
+        var batchResult = JSON.parse(response.getContentText());
+        for (var ticker in batchResult) {
+          if (allData[ticker] && batchResult[ticker].close) {
+            allData[ticker][cfgObj.key] = batchResult[ticker].close;
+          }
+        }
+        Utilities.sleep(50); // polite delay
+      }
+    }
+    
+    var results = [];
+    var masterStocks = stockListSheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    
+    for (var k = 0; k < masterStocks.length; k++) {
+      var symbol = masterStocks[k][0].toString().trim();
+      var name = masterStocks[k][1] ? masterStocks[k][1].toString().trim() : "";
+      if (!symbol) continue;
+      
+      var data = allData[symbol] || {};
+      
+      var lastPrice = null;
+      var close15m = data["15m"];
+      if (close15m && close15m.length > 0) {
+        var clean15m = close15m.filter(function(p) { return p !== null && p !== undefined; });
+        if (clean15m.length > 0) {
+          lastPrice = clean15m[clean15m.length - 1];
+        }
+      }
+      if (lastPrice === null) {
+        var close1d = data["1d"];
+        if (close1d && close1d.length > 0) {
+          var clean1d = close1d.filter(function(p) { return p !== null && p !== undefined; });
+          if (clean1d.length > 0) {
+            lastPrice = clean1d[clean1d.length - 1];
+          }
+        }
+      }
+      
+      var isMonthlyGreen = checkGreen(data["1mo"], 20, 50, lastPrice);
+      var isDailyGreen = checkGreen(data["1d"], 20, 50, lastPrice);
+      var is2hGreen = checkGreen(data["1h"], 40, 100, lastPrice); // 2H MA20/50 mapped to 1H MA40/100
+      var is1hGreen = checkGreen(data["1h"], 20, 50, lastPrice);
+      var is30mGreen = checkGreen(data["30m"], 20, 50, lastPrice);
+      var is15mGreen = checkGreen(data["15m"], 20, 50, lastPrice);
+      
+      var verdict = "Hold";
+      if (isMonthlyGreen && isDailyGreen && is2hGreen && is1hGreen && is30mGreen && is15mGreen) {
+        verdict = "Buy";
+      }
+      
+      results.push([
+        symbol,
+        name,
+        lastPrice,
+        isMonthlyGreen ? "GREEN" : "RED",
+        isDailyGreen ? "GREEN" : "RED",
+        is2hGreen ? "GREEN" : "RED",
+        is1hGreen ? "GREEN" : "RED",
+        is30mGreen ? "GREEN" : "RED",
+        is15mGreen ? "GREEN" : "RED",
+        verdict
+      ]);
+    }
+    
+    var taSheet = ss.getSheetByName("Technical Analysis");
+    if (!taSheet) {
+      taSheet = ss.insertSheet("Technical Analysis");
+    }
+    
+    taSheet.clear();
+    taSheet.clearConditionalFormatRules();
+    taSheet.setHiddenGridlines(false);
+    
+    var headers = [
+      "Symbol", 
+      "Company Name", 
+      "Price", 
+      "Monthly (1mo)", 
+      "Daily (1d)", 
+      "2 Hour (2h)", 
+      "1 Hour (1h)", 
+      "30 Min (30m)", 
+      "15 Min (15m)", 
+      "Verdict"
+    ];
+    taSheet.appendRow(headers);
+    
+    if (results.length > 0) {
+      taSheet.getRange(2, 1, results.length, headers.length).setValues(results);
+    }
+    
+    var numRows = results.length;
+    taSheet.getRange(1, 1, numRows + 1, headers.length).setFontFamily("Segoe UI").setFontSize(11);
+    taSheet.getRange(1, 1, 1, headers.length).setBackground("#1F4E79").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
+    
+    var dataRange = taSheet.getRange(2, 1, numRows, headers.length);
+    dataRange.setBorder(true, true, true, true, true, true, "#D9D9D9", SpreadsheetApp.BorderStyle.SOLID);
+    
+    taSheet.getRange(2, 1, numRows, 2).setHorizontalAlignment("left");
+    taSheet.getRange(2, 3, numRows, 1).setHorizontalAlignment("center").setNumberFormat("#,##0.00");
+    taSheet.getRange(2, 4, numRows, 7).setHorizontalAlignment("center").setFontWeight("bold");
+    
+    for (var r = 2; r <= numRows + 1; r++) {
+      if (r % 2 === 0) {
+        taSheet.getRange(r, 1, 1, headers.length).setBackground("#F2F4F7");
+      }
+    }
+    
+    var rules = [];
+    
+    var greenRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("GREEN")
+      .setBackground("#C6EFCE")
+      .setFontColor("#006100")
+      .setRanges([taSheet.getRange(2, 4, numRows, 6)])
+      .build();
+      
+    var redRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("RED")
+      .setBackground("#FFC7CE")
+      .setFontColor("#9C0006")
+      .setRanges([taSheet.getRange(2, 4, numRows, 6)])
+      .build();
+      
+    var buyRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("Buy")
+      .setBackground("#C6EFCE")
+      .setFontColor("#006100")
+      .setBold(true)
+      .setRanges([taSheet.getRange(2, 10, numRows, 1)])
+      .build();
+      
+    var holdRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("Hold")
+      .setBackground("#FFF2CC")
+      .setFontColor("#B25E00")
+      .setBold(true)
+      .setRanges([taSheet.getRange(2, 10, numRows, 1)])
+      .build();
+      
+    rules.push(greenRule, redRule, buyRule, holdRule);
+    taSheet.setConditionalFormatRules(rules);
+    
+    taSheet.autoResizeColumns(1, headers.length);
+    Logger.log("Technical Analysis sheet updated successfully!");
+    
+  } catch (err) {
+    Logger.log("Error in updateTechnicalAnalysis: " + err.toString());
   }
 }
