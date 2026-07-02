@@ -681,13 +681,18 @@ function calculateSMA(prices, period) {
 }
 
 /**
- * Helper to check if a timeframe is "GREEN" (Price > MA20 AND Price > MA50)
+ * Helper to check timeframe status and compute moving averages.
+ * Returns an object with the green status and formatted text including the averages.
  */
-function checkGreen(prices, period20, period50, lastPrice) {
-  if (!prices || prices.length === 0) return false;
+function getTimeframeStatus(prices, period20, period50, lastPrice) {
+  if (!prices || prices.length === 0) {
+    return { isGreen: false, text: "NO DATA" };
+  }
   var ma20 = calculateSMA(prices, period20);
   var ma50 = calculateSMA(prices, period50);
-  if (ma20 === null || ma50 === null) return false;
+  if (ma20 === null || ma50 === null) {
+    return { isGreen: false, text: "NO DATA" };
+  }
   
   var priceToUse = lastPrice;
   if (priceToUse === null || priceToUse === undefined) {
@@ -697,8 +702,13 @@ function checkGreen(prices, period20, period50, lastPrice) {
     }
   }
   
-  if (priceToUse === null || priceToUse === undefined) return false;
-  return (priceToUse > ma20 && priceToUse > ma50);
+  if (priceToUse === null || priceToUse === undefined) {
+    return { isGreen: false, text: "NO DATA" };
+  }
+  
+  var isGreen = (priceToUse > ma20 && priceToUse > ma50);
+  var text = (isGreen ? "GREEN" : "RED") + " (" + ma20.toFixed(2) + " / " + ma50.toFixed(2) + ")";
+  return { isGreen: isGreen, text: text };
 }
 
 /**
@@ -806,15 +816,15 @@ function updateTechnicalAnalysis() {
         }
       }
       
-      var isMonthlyGreen = checkGreen(data["1mo"], 20, 50, lastPrice);
-      var isDailyGreen = checkGreen(data["1d"], 20, 50, lastPrice);
-      var is2hGreen = checkGreen(data["1h"], 40, 100, lastPrice); // 2H MA20/50 mapped to 1H MA40/100
-      var is1hGreen = checkGreen(data["1h"], 20, 50, lastPrice);
-      var is30mGreen = checkGreen(data["30m"], 20, 50, lastPrice);
-      var is15mGreen = checkGreen(data["15m"], 20, 50, lastPrice);
+      var monthlyStatus = getTimeframeStatus(data["1mo"], 20, 50, lastPrice);
+      var dailyStatus = getTimeframeStatus(data["1d"], 20, 50, lastPrice);
+      var status2h = getTimeframeStatus(data["1h"], 40, 100, lastPrice); // 2H MA20/50 mapped to 1H MA40/100
+      var status1h = getTimeframeStatus(data["1h"], 20, 50, lastPrice);
+      var status30m = getTimeframeStatus(data["30m"], 20, 50, lastPrice);
+      var status15m = getTimeframeStatus(data["15m"], 20, 50, lastPrice);
       
       var verdict = "Hold";
-      if (isMonthlyGreen && isDailyGreen && is2hGreen && is1hGreen && is30mGreen && is15mGreen) {
+      if (monthlyStatus.isGreen && dailyStatus.isGreen && status2h.isGreen && status1h.isGreen && status30m.isGreen && status15m.isGreen) {
         verdict = "Buy";
       }
       
@@ -822,12 +832,12 @@ function updateTechnicalAnalysis() {
         symbol,
         name,
         lastPrice,
-        isMonthlyGreen ? "GREEN" : "RED",
-        isDailyGreen ? "GREEN" : "RED",
-        is2hGreen ? "GREEN" : "RED",
-        is1hGreen ? "GREEN" : "RED",
-        is30mGreen ? "GREEN" : "RED",
-        is15mGreen ? "GREEN" : "RED",
+        monthlyStatus.text,
+        dailyStatus.text,
+        status2h.text,
+        status1h.text,
+        status30m.text,
+        status15m.text,
         verdict
       ]);
     }
@@ -879,14 +889,14 @@ function updateTechnicalAnalysis() {
     var rules = [];
     
     var greenRule = SpreadsheetApp.newConditionalFormatRule()
-      .whenTextEqualTo("GREEN")
+      .whenTextStartsWith("GREEN")
       .setBackground("#C6EFCE")
       .setFontColor("#006100")
       .setRanges([taSheet.getRange(2, 4, numRows, 6)])
       .build();
       
     var redRule = SpreadsheetApp.newConditionalFormatRule()
-      .whenTextEqualTo("RED")
+      .whenTextStartsWith("RED")
       .setBackground("#FFC7CE")
       .setFontColor("#9C0006")
       .setRanges([taSheet.getRange(2, 4, numRows, 6)])
