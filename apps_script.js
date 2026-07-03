@@ -99,16 +99,28 @@ function doGet(e) {
     } else if (stockListSheet.getLastRow() <= 1) {
       initializeStockListSheet(stockListSheet);
     } else {
-      // Defensive check: Ensure email config cells are filled if sheet already exists
+      // Defensive check: Ensure config cells are filled if sheet already exists
       var emailCell = stockListSheet.getRange("D2");
-      if (!emailCell.getValue()) {
+      var phoneHeader = stockListSheet.getRange("E1");
+      if (!emailCell.getValue() || !phoneHeader.getValue()) {
         stockListSheet.getRange("D1").setValue("Alert Email").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
-        var email = "";
-        try {
-          email = Session.getActiveUser().getEmail();
-        } catch (err) {}
-        emailCell.setValue(email).setFontFamily("Segoe UI");
-        stockListSheet.autoResizeColumns(1, 4);
+        stockListSheet.getRange("E1").setValue("WhatsApp Phone (with Country Code)").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
+        stockListSheet.getRange("F1").setValue("CallMeBot API Key").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
+        
+        if (!emailCell.getValue()) {
+          var email = "";
+          try {
+            email = Session.getActiveUser().getEmail();
+          } catch (err) {}
+          emailCell.setValue(email).setFontFamily("Segoe UI");
+        }
+        
+        var phoneCell = stockListSheet.getRange("E2");
+        if (!phoneCell.getValue()) phoneCell.setValue("").setFontFamily("Segoe UI");
+        var apiKeyCell = stockListSheet.getRange("F2");
+        if (!apiKeyCell.getValue()) apiKeyCell.setValue("").setFontFamily("Segoe UI");
+        
+        stockListSheet.autoResizeColumns(1, 6);
       }
     }
     
@@ -476,6 +488,8 @@ function writePricesToSheet(dateStr, pricesData) {
     stockListSheet.getRange("D1").setValue("Alert Email").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
     stockListSheet.getRange("D2").setValue(alertEmail).setFontFamily("Segoe UI");
   }
+  var whatsappPhone = stockListSheet.getRange("E2").getValue() ? stockListSheet.getRange("E2").getValue().toString().trim() : "";
+  var whatsappApiKey = stockListSheet.getRange("F2").getValue() ? stockListSheet.getRange("F2").getValue().toString().trim() : "";
   
   var cellUpdates = 0;
   var lastRow = sheet.getLastRow();
@@ -513,10 +527,23 @@ function writePricesToSheet(dateStr, pricesData) {
   
   SpreadsheetApp.flush();
   
+  // Sort the rows by Verdict (Column 19/S) ascending so Hold (green) rows are grouped first, and Review (red) second.
+  var numStocks = tickerValues.length;
+  var sortRange = sheet.getRange(2, 1, numStocks, 19);
+  sortRange.sort({column: 19, ascending: true});
+  
+  // Re-apply alternating zebra striping background to sorted rows
+  for (var r = 2; r <= numStocks + 1; r++) {
+    var rowBg = (r % 2 === 0) ? "#F2F4F7" : "#FFFFFF";
+    sheet.getRange(r, 1, 1, 19).setBackground(rowBg);
+  }
+  
+  // Re-read sorted ticker values and new verdicts for accurate alert evaluation
+  var sortedTickerValues = sheet.getRange(2, 1, numStocks, 1).getValues();
   var newlyFlagged = [];
   var allReviewStocks = [];
-  for (var k = 0; k < tickerValues.length; k++) {
-    var symbol = tickerValues[k][0].toString().trim();
+  for (var k = 0; k < sortedTickerValues.length; k++) {
+    var symbol = sortedTickerValues[k][0].toString().trim();
     var r = 2 + k;
     var newVerdict = sheet.getRange(r, 19).getValue();
     var prevVerdict = prevVerdicts[symbol];
@@ -531,30 +558,58 @@ function writePricesToSheet(dateStr, pricesData) {
   
   if (newlyFlagged.length > 0) {
     var sheetUrl = ss.getUrl();
-    var subject = "🔴 NIFTY 50 Tracker Alert: " + newlyFlagged.length + " stock(s) flagged for Review";
-    var body = "The following NIFTY 50 stock(s) have turned RED (marked for Review) at the latest checkpoint on " + dateStr + ":\n\n" +
-               newlyFlagged.map(function(s) { return " - " + s; }).join("\n") + "\n\n" +
-               "Spreadsheet Link: " + sheetUrl + "\n\n" +
-               "Best regards,\nNifty 50 Price Tracker";
-    sendEmailAlert(alertEmail, subject, body);
+    
+    // Send Email Alert
+    if (alertEmail && alertEmail.indexOf("@") !== -1) {
+      var subject = "🔴 NIFTY 50 Tracker Alert: " + newlyFlagged.length + " stock(s) flagged for Review";
+      var body = "The following NIFTY 50 stock(s) have turned RED (marked for Review) at the latest checkpoint on " + dateStr + ":\n\n" +
+                 newlyFlagged.map(function(s) { return " - " + s; }).join("\n") + "\n\n" +
+                 "Spreadsheet Link: " + sheetUrl + "\n\n" +
+                 "Best regards,\nNifty 50 Price Tracker";
+      sendEmailAlert(alertEmail, subject, body);
+    }
+    
+    // Send WhatsApp Alert
+    if (whatsappPhone && whatsappApiKey) {
+      var waMsg = "*🔴 NIFTY 50 Tracker Alert*\n\n" +
+                  "The following NIFTY 50 stock(s) have turned RED (marked for Review) at the latest checkpoint on " + dateStr + ":\n\n" +
+                  newlyFlagged.map(function(s) { return "• " + s; }).join("\n") + "\n\n" +
+                  "Spreadsheet Link: " + sheetUrl;
+      sendWhatsAppAlert(whatsappPhone, whatsappApiKey, waMsg);
+    }
   }
   
   if (isCloseCheckpoint && cellUpdates > 0) {
     var sheetUrl = ss.getUrl();
-    var numStocks = tickerValues.length;
     var numReview = allReviewStocks.length;
     var numHold = numStocks - numReview;
     
-    var subject = "📊 NIFTY 50 Tracker: End-of-Day Report (" + dateStr + ")";
-    var body = "The trading day for " + dateStr + " is complete.\n\n" +
-               "SUMMARY STATS:\n" +
-               " - Total Stocks Tracked: " + numStocks + "\n" +
-               " - Hold Signals: " + numHold + "\n" +
-               " - Review Signals: " + numReview + "\n\n" +
-               (numReview > 0 ? "STOCKS FLAGGED FOR REVIEW:\n" + allReviewStocks.map(function(s) { return " - " + s; }).join("\n") : "All stocks remained GREEN/Neutral. Excellent day!") + "\n\n" +
-               "Spreadsheet Link: " + sheetUrl + "\n\n" +
-               "Best regards,\nNifty 50 Price Tracker";
-    sendEmailAlert(alertEmail, subject, body);
+    // Send Email Alert
+    if (alertEmail && alertEmail.indexOf("@") !== -1) {
+      var subject = "📊 NIFTY 50 Tracker: End-of-Day Report (" + dateStr + ")";
+      var body = "The trading day for " + dateStr + " is complete.\n\n" +
+                 "SUMMARY STATS:\n" +
+                 " - Total Stocks Tracked: " + numStocks + "\n" +
+                 " - Hold Signals: " + numHold + "\n" +
+                 " - Review Signals: " + numReview + "\n\n" +
+                 (numReview > 0 ? "STOCKS FLAGGED FOR REVIEW:\n" + allReviewStocks.map(function(s) { return " - " + s; }).join("\n") : "All stocks remained GREEN/Neutral. Excellent day!") + "\n\n" +
+                 "Spreadsheet Link: " + sheetUrl + "\n\n" +
+                 "Best regards,\nNifty 50 Price Tracker";
+      sendEmailAlert(alertEmail, subject, body);
+    }
+    
+    // Send WhatsApp Alert
+    if (whatsappPhone && whatsappApiKey) {
+      var waMsg = "*📊 NIFTY 50 Tracker: End-of-Day Report (" + dateStr + ")*\n\n" +
+                  "The trading day is complete.\n\n" +
+                  "*SUMMARY STATS:*\n" +
+                  "• Total Stocks: " + numStocks + "\n" +
+                  "• Hold Signals: " + numHold + "\n" +
+                  "• Review Signals: " + numReview + "\n\n" +
+                  (numReview > 0 ? "*STOCKS IN RED:*\n" + allReviewStocks.map(function(s) { return "• " + s; }).join("\n") : "All stocks remained GREEN/Neutral. Excellent day! 🎉") + "\n\n" +
+                  "Spreadsheet Link: " + sheetUrl;
+      sendWhatsAppAlert(whatsappPhone, whatsappApiKey, waMsg);
+    }
   }
   
   sheet.autoResizeColumns(1, 19);
@@ -608,8 +663,11 @@ function initializeStockListSheet(stockListSheet) {
     stockListSheet.appendRow(FALLBACK_STOCKS[i]);
   }
   
-  // Add Alert Email Config
+  // Add Config fields (Email & WhatsApp)
   stockListSheet.getRange("D1").setValue("Alert Email").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
+  stockListSheet.getRange("E1").setValue("WhatsApp Phone (with Country Code)").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
+  stockListSheet.getRange("F1").setValue("CallMeBot API Key").setFontWeight("bold").setBackground("#1F4E79").setFontColor("white").setFontFamily("Segoe UI");
+  
   var email = "";
   try {
     email = Session.getActiveUser().getEmail();
@@ -617,6 +675,8 @@ function initializeStockListSheet(stockListSheet) {
     email = "";
   }
   stockListSheet.getRange("D2").setValue(email).setFontFamily("Segoe UI");
+  stockListSheet.getRange("E2").setValue("").setFontFamily("Segoe UI");
+  stockListSheet.getRange("F2").setValue("").setFontFamily("Segoe UI");
   
   // Format borders
   var dataRange = stockListSheet.getRange(2, 1, FALLBACK_STOCKS.length, 2);
@@ -628,7 +688,7 @@ function initializeStockListSheet(stockListSheet) {
       stockListSheet.getRange(r, 1, 1, 2).setBackground("#F2F4F7");
     }
   }
-  stockListSheet.autoResizeColumns(1, 4);
+  stockListSheet.autoResizeColumns(1, 6);
 }
 
 /**
@@ -899,6 +959,8 @@ function updateTechnicalAnalysis() {
     
     if (results.length > 0) {
       taSheet.getRange(3, 1, results.length, numCols).setValues(results);
+      // Sort rows by Verdict (Column 16/P) ascending so Buy (green) rows are grouped first, and Hold (yellow) second.
+      taSheet.getRange(3, 1, results.length, numCols).sort({column: 16, ascending: true});
     }
     
     var numRows = results.length;
@@ -991,4 +1053,28 @@ function setupAutoUpdates() {
     "The sheet will now fetch prices and update the Technical Analysis dashboard automatically every 30 minutes.",
     SpreadsheetApp.getUi().ButtonSet.OK
   );
+}
+
+/**
+ * Sends a WhatsApp message via the CallMeBot API.
+ */
+function sendWhatsAppAlert(phone, apiKey, message) {
+  if (!phone || !apiKey) {
+    Logger.log("WhatsApp Phone or API Key is missing. Skipping alert.");
+    return;
+  }
+  try {
+    var encodedMessage = encodeURIComponent(message);
+    var url = "https://api.callmebot.com/whatsapp.php?phone=" + encodeURIComponent(phone) + 
+              "&text=" + encodedMessage + 
+              "&apikey=" + encodeURIComponent(apiKey);
+    
+    var response = UrlFetchApp.fetch(url, {
+      "muteHttpExceptions": true
+    });
+    Logger.log("WhatsApp response status: " + response.getResponseCode());
+    Logger.log("WhatsApp response: " + response.getContentText());
+  } catch (e) {
+    Logger.log("Error sending WhatsApp alert: " + e.toString());
+  }
 }
