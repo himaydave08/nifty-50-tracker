@@ -883,9 +883,17 @@ function updateTechnicalAnalysis() {
       var status30m = getTimeframeStatus(data["30m"], 20, 50, lastPrice);
       var status15m = getTimeframeStatus(data["15m"], 20, 50, lastPrice);
       
+      var statusList = [monthlyStatus, dailyStatus, status2h, status1h, status30m, status15m];
+      var allGreen = statusList.every(function(s) { return s.isGreen; });
+      var allRed = statusList.every(function(s) { 
+        return s.ma20 !== null && s.ma50 !== null && !s.isGreen; 
+      });
+      
       var verdict = "Hold";
-      if (monthlyStatus.isGreen && dailyStatus.isGreen && status2h.isGreen && status1h.isGreen && status30m.isGreen && status15m.isGreen) {
+      if (allGreen) {
         verdict = "Buy";
+      } else if (allRed) {
+        verdict = "Sell";
       }
       
       results.push([
@@ -1017,7 +1025,15 @@ function updateTechnicalAnalysis() {
       .setRanges([taSheet.getRange(3, 16, numRows, 1)])
       .build();
       
-    rules.push(greenRule, redRule, buyRule, holdRule);
+    var sellRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo("Sell")
+      .setBackground("#FFC7CE")
+      .setFontColor("#9C0006")
+      .setBold(true)
+      .setRanges([taSheet.getRange(3, 16, numRows, 1)])
+      .build();
+      
+    rules.push(greenRule, redRule, buyRule, holdRule, sellRule);
     taSheet.setConditionalFormatRules(rules);
     
     taSheet.autoResizeColumns(1, numCols);
